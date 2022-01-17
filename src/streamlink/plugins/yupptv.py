@@ -4,28 +4,9 @@ import time
 
 from streamlink.plugin import Plugin, PluginArgument, PluginArguments, pluginmatcher
 from streamlink.plugin.api import useragents
-from streamlink.stream.hls import HLSStream, HLSStreamReader, HLSStreamWorker
+from streamlink.stream.hls import HLSStream
 
 log = logging.getLogger(__name__)
-
-def override_encoding(resp, *args, **kwargs):
-    resp.encoding = "utf-8"
-
-class YuppTVHLSStreamWorker(HLSStreamWorker):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs);
-        self.reader.request_params.update(hooks={'response': override_encoding})
- 
-class YuppTVHLSStreamReader(HLSStreamReader):
-    __worker__ = YuppTVHLSStreamWorker
-
-
-class YuppTVHLSStream(HLSStream):
-    __reader__ = YuppTVHLSStreamReader
-    @classmethod
-    def _get_variant_playlist(cls, res):
-        res.encoding = "UTF-8"
-        return super()._get_variant_playlist(res)
 
 
 @pluginmatcher(re.compile(
@@ -66,6 +47,10 @@ class YuppTV(Plugin):
         super().__init__(url)
         self._authed = (self.session.http.cookies.get("BoxId")
                         and self.session.http.cookies.get("YuppflixToken"))
+
+    @staticmethod
+    def _override_encoding(res, **kwargs):
+        res.encoding = "utf-8"
 
     def _login_using_box_id_and_yuppflix_token(self, box_id, yuppflix_token):
         time_now = time.time()
@@ -123,8 +108,13 @@ class YuppTV(Plugin):
                 else:
                     log.error("This stream requires a subscription")
                 return
-
-            return YuppTVHLSStream.parse_variant_playlist(self.session, stream_url)
+            if "chunks.m3u8" in stream_url:
+                # some channels don't link a variant playlist but directly to the chunks - i.e. https://www.yupptv.com/channels/alai-balai/live
+                stream = HLSStream(self.session,stream_url,hooks={"response": self._override_encoding})
+                return {"unknown":stream}
+            return HLSStream.parse_variant_playlist(self.session,
+                                                    stream_url,
+                                                    hooks={"response": self._override_encoding})
         elif "btnsignup" in page.text:
             log.error("This stream requires you to login")
         elif "btnsubscribe" in page.text:
